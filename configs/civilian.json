@@ -1,0 +1,26 @@
+{
+  "agent_id": "civilian_01",
+  "agent_type": "civilian",
+  "personality": {
+    "aggression": 0.1,
+    "curiosity": 0.65,
+    "sociability": 0.8,
+    "caution": 0.6,
+    "patience": 0.7,
+    "loyalty": 0.5,
+    "risk_tolerance": 0.2
+  },
+  "goals": [
+    { "name": "work", "priority": 0.7 },
+    { "name": "trade", "priority": 0.6 },
+    { "name": "explore", "priority": 0.4 },
+    { "name": "survive", "priority": 0.55 }
+  ],
+  "constraints": ["pacifist"],
+  "allowed_actions": ["idle", "move", "talk", "trade", "follow", "flee", "patrol", "use_item", "hide"],
+  "memory_enabled": true,
+  "rl_policy": "heuristic",
+  "decision_interval_ms": 500,
+  "lod_level": "low",
+  "metadata": {}
+}

@@ -1,0 +1,1 @@
+"""OpenNPC API package."""

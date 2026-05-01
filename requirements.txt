@@ -1,0 +1,7 @@
+fastapi>=0.100
+uvicorn>=0.22
+pydantic>=2
+numpy>=1.24
+torch>=2
+pytest>=8
+httpx>=0.24

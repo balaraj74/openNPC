@@ -1,0 +1,27 @@
+{
+  "agent_id": "enemy_01",
+  "agent_type": "enemy",
+  "personality": {
+    "aggression": 0.8,
+    "curiosity": 0.35,
+    "sociability": 0.15,
+    "caution": 0.35,
+    "patience": 0.45,
+    "loyalty": 0.5,
+    "risk_tolerance": 0.7
+  },
+  "goals": [
+    { "name": "attack_target", "priority": 0.85 },
+    { "name": "survive", "priority": 0.55 },
+    { "name": "weaken_player", "priority": 0.45 }
+  ],
+  "constraints": [],
+  "allowed_actions": ["idle", "move", "attack", "defend", "flee", "seek_cover", "flank", "set_trap", "patrol"],
+  "memory_enabled": true,
+  "rl_policy": "heuristic",
+  "decision_interval_ms": 250,
+  "lod_level": "medium",
+  "metadata": {
+    "attack_range": 1.5
+  }
+}

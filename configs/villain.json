@@ -1,0 +1,28 @@
+{
+  "agent_id": "villain_01",
+  "agent_type": "villain",
+  "personality": {
+    "aggression": 0.65,
+    "curiosity": 0.5,
+    "sociability": 0.2,
+    "caution": 0.7,
+    "patience": 0.9,
+    "loyalty": 0.25,
+    "risk_tolerance": 0.45
+  },
+  "goals": [
+    { "name": "control_area", "priority": 0.85 },
+    { "name": "trigger_strategic_traps", "priority": 0.75 },
+    { "name": "survive", "priority": 0.6 },
+    { "name": "weaken_player", "priority": 0.5 }
+  ],
+  "constraints": [],
+  "allowed_actions": ["idle", "move", "defend", "flee", "seek_cover", "hide", "flank", "set_trap", "patrol"],
+  "memory_enabled": true,
+  "rl_policy": "heuristic",
+  "decision_interval_ms": 500,
+  "lod_level": "high",
+  "metadata": {
+    "strategy_interval_ms": 5000
+  }
+}

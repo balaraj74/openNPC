@@ -1,0 +1,29 @@
+{
+  "agent_id": "companion_01",
+  "agent_type": "companion",
+  "personality": {
+    "aggression": 0.35,
+    "curiosity": 0.55,
+    "sociability": 0.75,
+    "caution": 0.55,
+    "patience": 0.65,
+    "loyalty": 0.95,
+    "risk_tolerance": 0.45
+  },
+  "goals": [
+    { "name": "assist_player", "priority": 0.9 },
+    { "name": "protect", "priority": 0.75 },
+    { "name": "survive", "priority": 0.6 },
+    { "name": "interact", "priority": 0.35 }
+  ],
+  "constraints": [],
+  "allowed_actions": ["idle", "move", "talk", "follow", "defend", "attack", "flee", "seek_cover", "use_item", "patrol"],
+  "memory_enabled": true,
+  "rl_policy": "heuristic",
+  "decision_interval_ms": 200,
+  "lod_level": "high",
+  "metadata": {
+    "follow_distance": 2.0,
+    "assist_threshold": 0.3
+  }
+}
