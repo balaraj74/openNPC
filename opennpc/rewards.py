@@ -128,8 +128,10 @@ def _breakdown(components: dict[str, float], reason: str) -> RewardBreakdown:
 
 
 def _target_health(state: GameState) -> float:
-    return float(state.target_health if state.target_health is not None else state.value("target_health", 100.0))
+    val = state.target_health if state.target_health is not None else state.value("target_health", 100.0)
+    return float(val) if val is not None else 100.0
 
 
 def _distance(state: GameState) -> float:
-    return float(state.distance_to_target if state.distance_to_target is not None else state.value("distance_to_target", 0.0))
+    val = state.distance_to_target if state.distance_to_target is not None else state.value("distance_to_target", 0.0)
+    return float(val) if val is not None else 0.0

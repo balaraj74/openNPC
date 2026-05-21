@@ -4,7 +4,9 @@ from opennpc.async_engine import AsyncDecisionEngine
 from opennpc.cache import DecisionCache
 from opennpc.coordination import CoordinationAssignment, CoordinationPlan, MultiAgentCoordinator
 from opennpc.decision import DecisionEngine
+from opennpc.dialogue import DialogueLine, NPCDialogue
 from opennpc.experience import ExperienceRecord, RuntimeExperienceLogger
+from opennpc.llm import LLMEngine, LLMResponse
 from opennpc.lod import LODEngine, LODTier
 from opennpc.memory import InMemoryMemoryStore, SQLiteMemoryStore
 from opennpc.policy import HeuristicPolicy, RandomPolicy, ScriptedCombatPolicy
@@ -43,16 +45,20 @@ __all__ = [
     "DecisionCache",
     "DecisionEngine",
     "DecisionTrace",
+    "DialogueLine",
     "EnemyRewardStrategy",
     "ExperienceRecord",
     "GameState",
     "Goal",
     "HeuristicPolicy",
     "InMemoryMemoryStore",
+    "LLMEngine",
+    "LLMResponse",
     "LODEngine",
     "LODTier",
     "MemoryEvent",
     "MultiAgentCoordinator",
+    "NPCDialogue",
     "OpenNPCSDK",
     "Personality",
     "PlayerPatternTracker",
@@ -66,3 +72,4 @@ __all__ = [
     "VillainPlanner",
     "VillainRewardStrategy",
 ]
+

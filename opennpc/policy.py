@@ -101,10 +101,62 @@ class HeuristicPolicy:
         return candidates
 
     def _apply_state_scores(self, scores: dict[str, float], state: GameState) -> None:
-        health_ratio = max(0.0, min(1.0, state.health / 100.0))
-        distance = state.distance_to_target if state.distance_to_target is not None else 3.0
-        target_health = state.target_health if state.target_health is not None else 100.0
+        max_health = float(state.value("max_health", 20.0))
+        health_ratio = max(0.0, min(1.0, state.health / max_health))
+        distance = state.distance_to_target if state.distance_to_target is not None else 99.0
+        target_health = state.target_health if state.target_health is not None else 20.0
+        target_max_health = float(state.value("target_max_health", 20.0))
+        target_health_ratio = max(0.0, min(1.0, target_health / target_max_health))
+        is_enemy = state.agent_type in ("enemy", "villain") or state.agent_type.value in ("enemy", "villain")
+        has_target = distance < 90 or "player" in state.nearby_entities
 
+        # --- Enemy-type mob scoring (zombies, skeletons, etc.) ---
+        if is_enemy and has_target:
+            # Enemies are inherently aggressive toward players
+            self._add(scores, "attack", 0.55)
+            self._add(scores, "move", 0.25)
+
+            if distance <= 2.5:
+                # In melee range — attack is overwhelmingly favored
+                self._add(scores, "attack", 0.6)
+                self._add(scores, "defend", 0.05)
+            elif distance <= 6.0:
+                # Close enough to chase — attack + flank
+                self._add(scores, "attack", 0.35)
+                self._add(scores, "flank", 0.2)
+                self._add(scores, "move", 0.15)
+            elif distance <= 16.0:
+                # Medium range — pursue
+                self._add(scores, "move", 0.4)
+                self._add(scores, "attack", 0.15)
+                self._add(scores, "flank", 0.1)
+            else:
+                # Far away — patrol or slowly approach
+                self._add(scores, "patrol", 0.2)
+                self._add(scores, "move", 0.3)
+                self._add(scores, "attack", -0.3)
+
+            # Only flee when genuinely near death (< 20% HP)
+            if health_ratio <= 0.2:
+                self._add(scores, "flee", 0.5)
+                self._add(scores, "attack", -0.15)
+            elif health_ratio <= 0.4:
+                # Wounded but still fight — slightly more defensive
+                self._add(scores, "defend", 0.15)
+
+            # Smell blood — target is weak, go for the kill
+            if target_health_ratio <= 0.3:
+                self._add(scores, "attack", 0.5)
+                self._add(scores, "flank", 0.2)
+            elif target_health_ratio <= 0.5:
+                self._add(scores, "attack", 0.25)
+
+            if "player" in state.nearby_entities:
+                self._add(scores, "attack", 0.15)
+
+            return  # Enemy scoring is complete
+
+        # --- Non-enemy / no-target scoring (civilians, companions) ---
         if state.threat_level >= 0.65:
             self._add(scores, "defend", 0.35)
             self._add(scores, "seek_cover", 0.35 if state.cover_available else 0.0)
@@ -123,7 +175,7 @@ class HeuristicPolicy:
             self._add(scores, "move", 0.35)
             self._add(scores, "patrol", 0.1)
             self._add(scores, "attack", -0.4)
-        if target_health <= 30:
+        if target_health_ratio <= 0.3:
             self._add(scores, "attack", 0.35)
             self._add(scores, "flank", 0.15)
         if "player" in state.nearby_entities:

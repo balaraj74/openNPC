@@ -68,6 +68,20 @@ else:  # pragma: no cover
 require_api_deps()
 settings = RuntimeSettings.from_env()
 app = FastAPI(title="OpenNPC Runtime", version="0.1.0")
+from fastapi.exceptions import RequestValidationError
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    from fastapi.responses import JSONResponse
+    body = await request.body()
+    body_str = body.decode("utf-8", errors="ignore")
+    print(f"\n[OpenNPC Validation Error] Raw Body: {body_str}")
+    print(f"[OpenNPC Validation Error] Errors: {exc.errors()}\n")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": body_str},
+    )
+
 experience_logger = RuntimeExperienceLogger()
 engine = DecisionEngine(experience_logger=experience_logger)
 
@@ -130,6 +144,10 @@ def decide(request: DecisionRequest) -> dict[str, Any]:
     _validate_decision_request(request)
     config = AgentConfig.from_dict(request.config)
     state = GameState.from_dict(request.state)
+    
+    # Beautiful incoming AI request log
+    print(f"🤖 [OpenNPC Request] Mob UUID: {config.agent_id[:8]}... | Health: {state.health:.1f} | Threat Level: {state.threat_level:.2f}")
+    
     decision = engine.decide(
         config,
         state,
@@ -137,6 +155,10 @@ def decide(request: DecisionRequest) -> dict[str, Any]:
         reward=request.reward,
         event=request.event,
     )
+    
+    # Beautiful outgoing AI decision log
+    print(f"🧠 [OpenNPC Decision] Mob UUID: {config.agent_id[:8]}... -> Action: {decision.action.upper()} (Conf: {decision.confidence:.2f}) | Reason: {decision.reason}")
+    
     return decision.to_dict()
 
 
@@ -226,10 +248,16 @@ def debug_dashboard() -> str:
 from opennpc.lod import LODEngine
 from opennpc.strategy import PlayerPatternTracker
 from opennpc.villain import VillainPlanner
+from opennpc.llm import LLMEngine
+from opennpc.dialogue import NPCDialogue
 
 lod_engine = LODEngine()
 pattern_tracker = PlayerPatternTracker()
-villain_planner = VillainPlanner(pattern_tracker=pattern_tracker)
+
+# LLM engine — lazy-loaded on first use, won't block startup
+llm_engine = LLMEngine()
+npc_dialogue = NPCDialogue(llm=llm_engine)
+villain_planner = VillainPlanner(pattern_tracker=pattern_tracker, llm=llm_engine)
 
 
 DEBUG_DASHBOARD_HTML = """<!doctype html>
@@ -678,7 +706,84 @@ def debug_villain_plan(request: DecisionRequest) -> dict[str, Any]:
         "adaptation": plan.adaptation_note,
         "confidence": plan.confidence,
         "adjusted_goals": [{"name": g.name, "priority": g.priority} for g in plan.adjusted_goals],
+        "taunt": plan.taunt,
+        "llm_enhanced": plan.llm_enhanced,
     }
+
+
+# ── LLM & Dialogue Endpoints ──────────────────────────────────────────────
+
+
+@app.post("/dialogue/bark")
+def dialogue_bark(
+    config: dict[str, Any],
+    category: str = "combat_taunt",
+    context: str = "",
+) -> dict[str, Any]:
+    """Generate a short in-character bark/flavor line.
+
+    Categories: combat_taunt, combat_victory, combat_wounded,
+    combat_dying, greeting, idle_mutter, alert, retreat, spot_player
+    """
+    agent_config = AgentConfig.from_dict(config)
+    line = npc_dialogue.bark(agent_config, category=category, context=context)
+    return {
+        "text": line.text,
+        "category": line.category,
+        "agent_id": line.agent_id,
+        "emotion": line.emotion,
+        "latency_ms": line.latency_ms,
+        "cached": line.cached,
+    }
+
+
+@app.post("/dialogue/converse")
+def dialogue_converse(
+    config: dict[str, Any],
+    state: dict[str, Any],
+    player_message: str,
+    conversation_history: list[dict[str, str]] | None = None,
+    memory_summary: str = "",
+) -> dict[str, Any]:
+    """Generate a conversational NPC dialogue response."""
+    agent_config = AgentConfig.from_dict(config)
+    game_state = GameState.from_dict(state)
+    line = npc_dialogue.converse(
+        agent_config, game_state, player_message,
+        conversation_history=conversation_history,
+        memory_summary=memory_summary,
+    )
+    return {
+        "text": line.text,
+        "category": line.category,
+        "agent_id": line.agent_id,
+        "emotion": line.emotion,
+        "latency_ms": line.latency_ms,
+    }
+
+
+@app.post("/dialogue/personality")
+def dialogue_personality(config: dict[str, Any]) -> dict[str, Any]:
+    """Generate a rich personality description for an NPC."""
+    agent_config = AgentConfig.from_dict(config)
+    description = npc_dialogue.personality_description(agent_config)
+    return {"agent_id": agent_config.agent_id, "description": description}
+
+
+@app.get("/llm/status")
+def llm_status() -> dict[str, Any]:
+    """Check LLM engine status."""
+    return llm_engine.status()
+
+
+@app.post("/llm/load")
+def llm_load() -> dict[str, Any]:
+    """Manually trigger LLM model loading (pre-warm)."""
+    try:
+        llm_engine.load()
+        return {"status": "loaded", **llm_engine.status()}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 
 def main() -> None:
@@ -689,3 +794,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

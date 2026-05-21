@@ -157,9 +157,13 @@ class DecisionEngine:
             memory_summary=memory_summary,
             state_snapshot=state.to_dict(),
         )
+        outgoing_action = final_action
+        if outgoing_action == "flee" and "retreat" in config.allowed_actions:
+            outgoing_action = "retreat"
+
         decision = ActionDecision(
             agent_id=config.agent_id,
-            action=final_action,
+            action=outgoing_action,
             confidence=policy_decision.confidence,
             reason=policy_decision.reason,
             memory_update=memory_update,
@@ -305,14 +309,22 @@ class DecisionEngine:
         state: GameState,
         available_actions: list[str] | None = None,
     ) -> list[str]:
-        candidates = list(available_actions if available_actions is not None else config.allowed_actions)
-        candidates = [action for action in candidates if action in config.allowed_actions]
+        # Action translation layer for external clients (e.g. Java "retreat" -> "flee")
+        allowed_list = list(config.allowed_actions)
+        if "retreat" in allowed_list and "flee" not in allowed_list:
+            allowed_list.append("flee")
+
+        candidates = list(available_actions if available_actions is not None else allowed_list)
+        if "retreat" in candidates and "flee" not in candidates:
+            candidates.append("flee")
+
+        candidates = [action for action in candidates if action in allowed_list]
         constraints = set(config.constraints)
 
         if state.health <= 0:
-            return ["idle"] if "idle" in config.allowed_actions else []
+            return ["idle"] if "idle" in allowed_list else []
         if "pacifist" in constraints:
-            candidates = [action for action in candidates if action not in {"attack", "set_trap", "flank"}]
+            candidates = [action for action in candidates if action not in {"attack", "flank"}]
         if "no_traps" in constraints:
             candidates = [action for action in candidates if action != "set_trap"]
         if not state.cover_available:
@@ -321,8 +333,14 @@ class DecisionEngine:
             candidates = [action for action in candidates if action != "use_item"]
 
         distance = state.distance_to_target
-        attack_range = float(config.metadata.get("attack_range", 1.5))
-        has_target = state.target_health is not None or "player" in state.nearby_entities or state.value("target_id")
+        attack_range = float(config.metadata.get("attack_range", 16.0))
+        has_target = (
+            state.target_health is not None
+            or "player" in state.nearby_entities
+            or state.value("target_id")
+            # Infer target if distance_to_target was provided (client measured it)
+            or (distance is not None and distance >= 0)
+        )
         if not has_target:
             candidates = [action for action in candidates if action not in {"attack", "flank"}]
         elif distance is not None and distance > attack_range:
@@ -332,7 +350,7 @@ class DecisionEngine:
         for action in candidates:
             if action not in deduped:
                 deduped.append(action)
-        return deduped or (["idle"] if "idle" in config.allowed_actions else [])
+        return deduped or (["idle"] if "idle" in allowed_list else [])
 
     def _fallback_decision(
         self,

@@ -190,7 +190,9 @@ class GameState:
 
     def value(self, name: str, default: Any = None) -> Any:
         if hasattr(self, name):
-            return getattr(self, name)
+            val = getattr(self, name)
+            if val is not None:
+                return val
         return self.extras.get(name, default)
 
     def to_dict(self) -> dict[str, Any]:

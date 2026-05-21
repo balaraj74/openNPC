@@ -15,12 +15,13 @@ OpenNPC provides a production-ready foundation for building intelligent NPCs tha
 | **Goal System** | Priority-scored goals with constraint validation and dynamic re-ranking |
 | **Memory** | In-memory short-term + SQLite persistent long-term memory with forgetting curves |
 | **Strategy** | `PlayerPatternTracker` + `VillainPlanner` for adaptive enemy intelligence |
+| **LLM Brain** | Local small LLM (Qwen 0.5B) for NPC dialogue, personality text, and strategic planning |
 | **LOD Engine** | AI Level-of-Detail that scales compute budget by distance/visibility/importance |
 | **Async Engine** | Thread-pool backed async wrapper for non-blocking game engine integration |
 | **Training** | PyTorch PPO + DQN pipelines with experience replay and target networks |
 | **Simulation** | Grid combat env + village social env for offline training and evaluation |
 | **Inference API** | FastAPI service with batch decisions, debug endpoints, and health checks |
-| **Engine Adapters** | Unity C# REST client, Unreal C++ HTTP client (Blueprint-ready) |
+| **Engine Adapters** | Unity C# REST client, Unreal C++ HTTP client, Minecraft Forge mod |
 
 ---
 
@@ -59,6 +60,9 @@ python examples/village_demo.py
 
 # LOD scaling with 50 agents
 python examples/lod_demo.py
+
+# LLM-enhanced dialogue and strategic planning
+python examples/llm_dialogue_demo.py
 ```
 
 ### 4. Start the Inference API
@@ -143,12 +147,15 @@ openNPC/
 │   ├── goals.py               GoalScorer — priority-weighted goal evaluation
 │   ├── memory.py              InMemoryMemoryStore + SQLiteMemoryStore
 │   ├── policy.py              HeuristicPolicy, ScriptedCombatPolicy, RandomPolicy
+│   ├── llm.py                 LLMEngine — local small LLM backend (Qwen, SmolLM, Phi-3)
+│   ├── dialogue.py            NPCDialogue — barks, conversation, personality text
+│   ├── prompts.py             Prompt templates for LLM reasoning
 │   ├── lod.py                 LODEngine — AI Level-of-Detail scaling
 │   ├── strategy.py            PlayerPatternTracker — behavioral analysis
-│   ├── villain.py             VillainPlanner — adaptive enemy planning
+│   ├── villain.py             VillainPlanner — LLM-enhanced adaptive planning
 │   ├── async_engine.py        AsyncDecisionEngine — non-blocking wrapper
 │   ├── api/
-│   │   └── service.py         FastAPI inference + debug endpoints
+│   │   └── service.py         FastAPI inference + debug + dialogue endpoints
 │   ├── adapters/
 │   │   └── adapter_utils.py   Python-side adapter helpers
 │   ├── simulation/
@@ -162,7 +169,8 @@ openNPC/
 │       └── logger.py          Structured training logger (JSONL)
 ├── adapters/
 │   ├── unity/                 Unity C# REST client
-│   └── unreal/                Unreal C++ HTTP adapter (Blueprint-ready)
+│   ├── unreal/                Unreal C++ HTTP adapter (Blueprint-ready)
+│   └── minecraft_forge/       Minecraft Forge 1.20.1 mod (Java)
 ├── configs/                   Example agent configs (enemy, civilian, companion, villain)
 ├── examples/                  Runnable demos
 ├── tests/                     Unit + integration tests
@@ -213,7 +221,7 @@ modified_config = lod.apply_to_config("npc_01", config)  # reduced interval/poli
 Adaptive enemy intelligence. The tracker records player actions and computes behavioral profiles. The planner generates strategic responses.
 
 ```python
-from opennpc import PlayerPatternTracker, VillainPlanner
+from opennpc import PlayerPatternTracker, VillainPlanner, LLMEngine
 
 tracker = PlayerPatternTracker(window_size=15)
 tracker.record("attack")
@@ -223,10 +231,46 @@ tracker.record("flank")
 print(tracker.aggression_estimate())    # 0.67
 print(tracker.counter_recommendation()) # "defensive_positioning"
 
-planner = VillainPlanner(pattern_tracker=tracker)
+# With optional LLM for enriched strategic reasoning
+llm = LLMEngine(model_name="qwen-0.5b")
+planner = VillainPlanner(pattern_tracker=tracker, llm=llm)
 plan = planner.plan(config, state)
-print(plan.long_term_strategy)          # Strategic plan text
+print(plan.long_term_strategy)          # LLM-enriched strategy
 print(plan.predicted_player_response)   # What the AI expects the player to do
+print(plan.taunt)                       # In-character villain taunt
+```
+
+### LLMEngine + NPCDialogue
+
+Local small LLM for dialogue, personality text, and strategic planning. Runs on GPU (CUDA) or CPU. Lazy-loaded on first use.
+
+```python
+from opennpc import LLMEngine, NPCDialogue
+
+# Supported models (all fit in 4GB VRAM):
+# "qwen-0.5b"    → Qwen2.5-0.5B-Instruct (default, best quality/speed)
+# "smollm-360m"  → SmolLM2-360M-Instruct (fastest, smallest)
+# "smollm-1.7b"  → SmolLM2-1.7B-Instruct (best quality, needs 2GB)
+# "phi-3-mini"   → Phi-3-mini-4k-instruct (best reasoning, needs 3GB)
+
+llm = LLMEngine(model_name="qwen-0.5b")  # auto-selects CUDA or CPU
+dialogue = NPCDialogue(llm=llm)
+
+# Combat barks — short, cached, fast (~150ms after warmup)
+bark = dialogue.bark(enemy_config, category="combat_taunt")
+print(bark.text)  # "Drop your weapons, you're toast!"
+
+# NPC conversation — longer, context-aware
+response = dialogue.converse(
+    civilian_config, state,
+    player_message="Can you help me find the temple?",
+    conversation_history=[{"role": "player", "text": "Hello!"}],
+)
+print(response.text)  # "The temple is behind the ancient gate..."
+
+# Personality description — for character sheets
+desc = dialogue.personality_description(villain_config)
+print(desc)  # Rich narrative description
 ```
 
 ### AsyncDecisionEngine
@@ -394,6 +438,16 @@ Response:
 | `GET /debug/lod` | Current LOD tier assignments |
 | `GET /debug/patterns` | Player pattern analysis |
 | `GET /debug/villain/plan` | Latest villain strategic plan |
+
+### Dialogue Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `POST /dialogue/bark` | Short in-character bark/flavor line (combat taunts, greetings) |
+| `POST /dialogue/converse` | Conversational NPC dialogue response |
+| `POST /dialogue/personality` | Rich personality description for NPC |
+| `GET /llm/status` | LLM engine status (loaded, device, cache) |
+| `POST /llm/load` | Pre-warm the LLM model |
 | `GET /health` | Service health check |
 
 ---
@@ -447,6 +501,7 @@ Use any HTTP client to POST JSON to `/decide`. The API is engine-agnostic.
 | Core | `pydantic`, `numpy` |
 | `[api]` | `fastapi`, `uvicorn` |
 | `[training]` | `torch` |
+| `[llm]` | `transformers`, `accelerate`, `torch` |
 | `[dev]` | `pytest`, `httpx` |
 
 ---

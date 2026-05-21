@@ -27,13 +27,14 @@ training = ["numpy>=1.24", "torch>=2"]
 onnx = ["onnxruntime>=1.17"]
 backends = ["redis>=4"]
 grpc = ["grpcio>=1.60", "grpcio-tools>=1.60"]
+llm = ["transformers>=4.40", "accelerate>=0.25", "torch>=2"]
 dev = [
   "pytest>=8",
   "httpx>=0.24",
   "fakeredis>=2.20",
 ]
 all = [
-  "opennpc[api,training,onnx,backends,grpc]",
+  "opennpc[api,training,onnx,backends,grpc,llm]",
 ]
 
 [project.scripts]
