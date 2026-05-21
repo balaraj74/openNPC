@@ -1,17 +1,24 @@
 package com.opennpc.mod;
 
 import com.mojang.logging.LogUtils;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.ai.goal.Goal;
+import net.minecraft.world.entity.monster.Zombie;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
+
 import java.util.EnumSet;
+import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * AI Goal that replaces vanilla behavior with decisions from the OpenNPC server.
- * Handles the full combat loop including actual melee damage dealing.
+ * Zombies are treated as VILLAIN agents with full strategic planning, memory,
+ * pattern tracking, and LLM-generated dialogue barks.
  */
 public class OpenNPCGoal extends Goal {
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -22,16 +29,26 @@ public class OpenNPCGoal extends Goal {
     private int decisionCooldown = 0;
     private boolean isQuerying = false;
     private String currentAction = "patrol";
+    private String lastBark = "";
+    private int barkCooldown = 0;
 
-    // Melee attack timing (vanilla zombie attacks every 20 ticks = 1 second)
+    // Melee attack timing
     private int attackCooldown = 0;
     private static final int ATTACK_INTERVAL = 20;
-    private static final double MELEE_REACH = 2.0;
+    private static final double MELEE_REACH = 2.5;
+
+    // Track player actions for pattern reporting
+    private String lastPlayerAction = "idle";
+    private float lastPlayerHealth = 20.0f;
+
+    // Villain intelligence
+    private int encounterCount = 0;
+    private int totalDamageDealt = 0;
+    private int totalDamageReceived = 0;
 
     public OpenNPCGoal(PathfinderMob mob, OpenNPCClient client) {
         this.mob = mob;
         this.client = client;
-        // Control all three flags so vanilla goals don't interfere
         this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK, Flag.JUMP));
     }
 
@@ -47,23 +64,74 @@ public class OpenNPCGoal extends Goal {
 
     @Override
     public void tick() {
-        // Count down attack cooldown every tick
-        if (attackCooldown > 0) {
-            attackCooldown--;
-        }
+        if (attackCooldown > 0) attackCooldown--;
+        if (barkCooldown > 0) barkCooldown--;
+        if (decisionCooldown > 0) decisionCooldown--;
 
-        // Count down decision cooldown
-        if (decisionCooldown > 0) {
-            decisionCooldown--;
-        }
-
-        // Query the AI server periodically
         if (decisionCooldown <= 0 && !isQuerying) {
             queryAI();
         }
 
-        // Execute the current action every tick
         executeAction();
+    }
+
+    /**
+     * Detects what the player is doing for pattern tracking.
+     */
+    private String detectPlayerAction(Player player) {
+        if (player == null) return "idle";
+
+        float currentHealth = player.getHealth();
+        boolean playerSprinting = player.isSprinting();
+        boolean playerCrouching = player.isCrouching();
+        boolean playerSwinging = player.swinging;
+        double dist = mob.distanceTo(player);
+
+        // Detect player's combat behavior
+        if (playerSwinging && dist < 4.0) {
+            return "attack";
+        } else if (playerSprinting && dist < 8.0 && dist > 3.0) {
+            return "charge";
+        } else if (playerSprinting && dist > 8.0) {
+            return "retreat";
+        } else if (playerCrouching) {
+            return "sneak";
+        } else if (currentHealth < lastPlayerHealth) {
+            // Player took damage from something else
+            return "damaged";
+        } else if (dist < 3.0 && !playerSwinging) {
+            return "block";  // close but not attacking = defensive
+        } else if (dist > 16.0) {
+            return "idle";
+        } else {
+            return "approach";
+        }
+    }
+
+    /**
+     * Build nearby entity list for spatial awareness.
+     */
+    private String buildNearbyEntities() {
+        AABB area = mob.getBoundingBox().inflate(16.0);
+        List<LivingEntity> nearby = mob.level().getEntitiesOfClass(
+            LivingEntity.class, area,
+            e -> e != mob && e.isAlive()
+        );
+
+        if (nearby.isEmpty()) return "[]";
+
+        String entities = nearby.stream()
+            .limit(8)  // Cap at 8 to keep JSON small
+            .map(e -> {
+                String type = e instanceof Player ? "player" :
+                    e.getType().getDescriptionId().replaceAll("^entity\\.minecraft\\.", "");
+                double dist = mob.distanceTo(e);
+                return String.format("{\"type\":\"%s\",\"distance\":%.1f,\"health\":%.0f}",
+                    type, dist, e.getHealth());
+            })
+            .collect(Collectors.joining(","));
+
+        return "[" + entities + "]";
     }
 
     private void queryAI() {
@@ -74,7 +142,16 @@ public class OpenNPCGoal extends Goal {
         float playerHealth = nearestPlayer != null ? nearestPlayer.getHealth() : -1;
         boolean hasTarget = nearestPlayer != null && distance >= 0 && distance <= 24.0;
 
-        // Compute threat level based on proximity
+        // Track player behavior
+        if (nearestPlayer != null) {
+            String playerAction = detectPlayerAction(nearestPlayer);
+            if (!playerAction.equals(lastPlayerAction)) {
+                lastPlayerAction = playerAction;
+            }
+            lastPlayerHealth = nearestPlayer.getHealth();
+        }
+
+        // Compute threat level
         float threatLevel = 0.1f;
         if (nearestPlayer != null) {
             if (distance <= 2.0) threatLevel = 0.95f;
@@ -84,19 +161,43 @@ public class OpenNPCGoal extends Goal {
             else threatLevel = 0.2f;
         }
 
-        // Build config — aggressive enemy personality
-        String configJson = String.format(
-            "{\"agent_id\":\"%s\",\"agent_type\":\"enemy\","
-            + "\"personality\":{\"aggression\":0.9,\"caution\":0.1,\"risk_tolerance\":0.85,"
-            + "\"patience\":0.2,\"curiosity\":0.3,\"sociability\":0.05,\"loyalty\":0.5},"
-            + "\"allowed_actions\":[\"patrol\",\"attack\",\"retreat\",\"idle\",\"move\",\"flank\",\"defend\"]}",
-            mob.getStringUUID()
-        );
+        // Determine if this is a zombie (VILLAIN) or other mob (ENEMY)
+        boolean isVillain = mob instanceof Zombie;
+        String agentType = isVillain ? "villain" : "enemy";
 
-        // Build state — include everything the decision engine needs
+        // Build config — villain gets full strategic personality
+        String configJson;
+        if (isVillain) {
+            configJson = String.format(
+                "{\"agent_id\":\"%s\",\"agent_type\":\"villain\","
+                + "\"personality\":{\"aggression\":0.75,\"caution\":0.5,\"risk_tolerance\":0.7,"
+                + "\"patience\":0.6,\"curiosity\":0.4,\"sociability\":0.1,\"loyalty\":0.3},"
+                + "\"goals\":["
+                + "{\"name\":\"weaken_player\",\"priority\":0.9},"
+                + "{\"name\":\"survive\",\"priority\":0.6},"
+                + "{\"name\":\"control_area\",\"priority\":0.7},"
+                + "{\"name\":\"trigger_strategic_traps\",\"priority\":0.5},"
+                + "{\"name\":\"attack_target\",\"priority\":0.85}"
+                + "],"
+                + "\"allowed_actions\":[\"patrol\",\"attack\",\"retreat\",\"idle\",\"move\","
+                + "\"flank\",\"defend\",\"set_trap\",\"hide\",\"seek_cover\"]}",
+                mob.getStringUUID()
+            );
+        } else {
+            configJson = String.format(
+                "{\"agent_id\":\"%s\",\"agent_type\":\"enemy\","
+                + "\"personality\":{\"aggression\":0.9,\"caution\":0.1,\"risk_tolerance\":0.85,"
+                + "\"patience\":0.2,\"curiosity\":0.3,\"sociability\":0.05,\"loyalty\":0.5},"
+                + "\"allowed_actions\":[\"patrol\",\"attack\",\"retreat\",\"idle\",\"move\",\"flank\",\"defend\"]}",
+                mob.getStringUUID()
+            );
+        }
+
+        // Build comprehensive state
         StringBuilder sb = new StringBuilder();
         sb.append("{");
         sb.append(String.format("\"agent_id\":\"%s\",", mob.getStringUUID()));
+        sb.append(String.format("\"agent_type\":\"%s\",", agentType));
         sb.append(String.format("\"health\":%.1f,", mob.getHealth()));
         sb.append(String.format("\"max_health\":%.1f,", mob.getMaxHealth()));
         sb.append(String.format("\"threat_level\":%.2f,", threatLevel));
@@ -106,17 +207,32 @@ public class OpenNPCGoal extends Goal {
             sb.append(String.format("\"distance_to_target\":%.2f,", distance));
             sb.append(String.format("\"target_health\":%.1f,", playerHealth));
             sb.append(String.format("\"target_max_health\":%.1f,", nearestPlayer.getMaxHealth()));
-            sb.append("\"nearby_entities\":[\"player\"],");
+            sb.append(String.format("\"nearby_entities\":%s,", buildNearbyEntities()));
         } else {
             sb.append("\"distance_to_target\":null,");
             sb.append("\"target_health\":null,");
             sb.append("\"nearby_entities\":[],");
         }
 
-        sb.append("\"cover_available\":false,");
+        sb.append(String.format("\"cover_available\":%s,", mob.level().canSeeSky(mob.blockPosition()) ? "false" : "true"));
         sb.append(String.format("\"last_action\":\"%s\",", currentAction));
+        sb.append(String.format("\"player_action\":\"%s\",", lastPlayerAction));
+        sb.append(String.format("\"encounter_count\":%d,", encounterCount));
+        sb.append(String.format("\"damage_dealt\":%d,", totalDamageDealt));
+        sb.append(String.format("\"damage_received\":%d,", totalDamageReceived));
         sb.append(String.format("\"tick\":%d", mob.tickCount));
         sb.append("}");
+
+        // Track encounter
+        if (hasTarget && currentAction.equals("patrol")) {
+            encounterCount++;
+        }
+
+        // Report player action to pattern tracker
+        if (hasTarget) {
+            String eventText = String.format("player_%s_at_distance_%.0f", lastPlayerAction, distance);
+            client.reportEvent(mob.getStringUUID(), eventText);
+        }
 
         String stateJson = sb.toString();
 
@@ -124,28 +240,45 @@ public class OpenNPCGoal extends Goal {
             mob.level().getServer().execute(() -> {
                 String newAction = response.action.toLowerCase();
                 if (!newAction.equals(currentAction)) {
-                    LOGGER.info("[OpenNPC] {} ({}): {} -> {} | hp={} | dist={} | reason: {}",
-                        mob.getType().getDescriptionId(),
+                    LOGGER.info("[OpenNPC] {} {}: {} -> {} | hp={} | dist={} | conf={} | reason: {}",
+                        isVillain ? "VILLAIN" : "ENEMY",
                         mob.getStringUUID().substring(0, 8),
                         currentAction, newAction,
                         String.format("%.0f", mob.getHealth()),
                         hasTarget ? String.format("%.1f", distance) : "N/A",
+                        String.format("%.2f", response.confidence),
                         response.reason);
                 }
                 currentAction = newAction;
+
+                // Display bark text above zombie's head (villain only)
+                if (isVillain && response.bark != null && !response.bark.isEmpty()
+                        && !response.bark.equals(lastBark) && barkCooldown <= 0) {
+                    lastBark = response.bark;
+                    barkCooldown = 100;  // 5 seconds between barks
+
+                    // Send bark to all nearby players
+                    mob.level().getEntitiesOfClass(Player.class,
+                        mob.getBoundingBox().inflate(24.0)).forEach(player -> {
+                        player.sendSystemMessage(
+                            Component.literal("§c§l[Zombie] §r§7" + response.bark)
+                        );
+                    });
+
+                    LOGGER.info("[OpenNPC] VILLAIN BARK: \"{}\"", response.bark);
+                }
+
                 isQuerying = false;
-                // Faster re-query when in combat (20 ticks = 1s), slower when idle (40 ticks = 2s)
-                decisionCooldown = hasTarget ? 20 : 40;
+                // Villains query faster for smarter behavior
+                decisionCooldown = hasTarget ? (isVillain ? 15 : 20) : 40;
             });
         }).exceptionally(ex -> {
             mob.level().getServer().execute(() -> {
                 isQuerying = false;
                 decisionCooldown = 40;
-                // Default hostile behavior when server is down
+                // Fallback: aggressive by default
                 Player p = mob.level().getNearestPlayer(mob, 16.0D);
-                if (p != null) {
-                    currentAction = "attack";
-                }
+                if (p != null) currentAction = "attack";
             });
             return null;
         });
@@ -156,27 +289,50 @@ public class OpenNPCGoal extends Goal {
 
         switch (currentAction) {
             case "attack":
-            case "flank":
                 if (nearestPlayer != null) {
                     double dist = mob.distanceTo(nearestPlayer);
                     mob.setTarget(nearestPlayer);
                     mob.getLookControl().setLookAt(nearestPlayer, 30.0F, 30.0F);
 
                     if (dist > MELEE_REACH) {
-                        // Chase the player — sprint speed
                         mob.getNavigation().moveTo(nearestPlayer, 1.2D);
                         mob.setSprinting(dist > 5.0);
                     } else {
-                        // In melee range — ACTUALLY HIT THE PLAYER
                         mob.getNavigation().stop();
                         if (attackCooldown <= 0) {
-                            mob.swing(mob.getUsedItemHand());  // Visual arm swing
-                            mob.doHurtTarget(nearestPlayer);   // Deal actual damage
+                            mob.swing(mob.getUsedItemHand());
+                            if (mob.doHurtTarget(nearestPlayer)) {
+                                totalDamageDealt += 3;  // Zombie base damage
+                            }
                             attackCooldown = ATTACK_INTERVAL;
                         }
                     }
                 } else {
-                    // No player nearby, fall back to patrolling
+                    doPatrol();
+                }
+                break;
+
+            case "flank":
+                if (nearestPlayer != null) {
+                    double dist = mob.distanceTo(nearestPlayer);
+                    mob.setTarget(nearestPlayer);
+                    mob.getLookControl().setLookAt(nearestPlayer, 30.0F, 30.0F);
+
+                    // Move to a position offset from direct line
+                    Vec3 toPlayer = nearestPlayer.position().subtract(mob.position()).normalize();
+                    Vec3 flankDir = new Vec3(-toPlayer.z, 0, toPlayer.x);  // perpendicular
+                    Vec3 flankTarget = nearestPlayer.position().add(flankDir.scale(3.0));
+                    mob.getNavigation().moveTo(flankTarget.x, flankTarget.y, flankTarget.z, 1.15D);
+                    mob.setSprinting(true);
+
+                    if (dist <= MELEE_REACH && attackCooldown <= 0) {
+                        mob.swing(mob.getUsedItemHand());
+                        if (mob.doHurtTarget(nearestPlayer)) {
+                            totalDamageDealt += 3;
+                        }
+                        attackCooldown = ATTACK_INTERVAL;
+                    }
+                } else {
                     doPatrol();
                 }
                 break;
@@ -187,17 +343,44 @@ public class OpenNPCGoal extends Goal {
                     mob.setTarget(nearestPlayer);
                     mob.getLookControl().setLookAt(nearestPlayer, 30.0F, 30.0F);
 
-                    // Hold ground but attack if player gets close
                     if (dist <= MELEE_REACH && attackCooldown <= 0) {
                         mob.swing(mob.getUsedItemHand());
-                        mob.doHurtTarget(nearestPlayer);
+                        if (mob.doHurtTarget(nearestPlayer)) {
+                            totalDamageDealt += 3;
+                        }
                         attackCooldown = ATTACK_INTERVAL;
                     } else if (dist > 6.0D) {
-                        // Slowly approach if player is too far
                         mob.getNavigation().moveTo(nearestPlayer, 0.7D);
                     } else {
                         mob.getNavigation().stop();
                     }
+                }
+                break;
+
+            case "set_trap":
+            case "hide":
+                // Villain tactical: move to a hidden position near player
+                if (nearestPlayer != null) {
+                    mob.setTarget(null);
+                    mob.setSprinting(false);
+                    mob.getLookControl().setLookAt(nearestPlayer, 30.0F, 30.0F);
+
+                    // Find a position behind cover (opposite side from player)
+                    Vec3 away = mob.position().subtract(nearestPlayer.position()).normalize().scale(5.0D);
+                    Vec3 hidePos = mob.position().add(away);
+                    mob.getNavigation().moveTo(hidePos.x, hidePos.y, hidePos.z, 0.9D);
+                } else {
+                    doPatrol();
+                }
+                break;
+
+            case "seek_cover":
+                if (nearestPlayer != null) {
+                    mob.setTarget(null);
+                    Vec3 away = mob.position().subtract(nearestPlayer.position()).normalize().scale(6.0D);
+                    Vec3 coverPos = mob.position().add(away);
+                    mob.getNavigation().moveTo(coverPos.x, coverPos.y, coverPos.z, 1.1D);
+                    mob.getLookControl().setLookAt(nearestPlayer, 30.0F, 30.0F);
                 }
                 break;
 
@@ -207,10 +390,11 @@ public class OpenNPCGoal extends Goal {
                     mob.getNavigation().moveTo(nearestPlayer, 1.0D);
                     mob.getLookControl().setLookAt(nearestPlayer, 30.0F, 30.0F);
 
-                    // Still attack if in range while moving
                     if (mob.distanceTo(nearestPlayer) <= MELEE_REACH && attackCooldown <= 0) {
                         mob.swing(mob.getUsedItemHand());
-                        mob.doHurtTarget(nearestPlayer);
+                        if (mob.doHurtTarget(nearestPlayer)) {
+                            totalDamageDealt += 3;
+                        }
                         attackCooldown = ATTACK_INTERVAL;
                     }
                 }
@@ -237,7 +421,6 @@ public class OpenNPCGoal extends Goal {
                 mob.getNavigation().stop();
                 mob.setTarget(null);
                 mob.setSprinting(false);
-                // Idle zombies still look at nearby players menacingly
                 if (nearestPlayer != null && mob.distanceTo(nearestPlayer) <= 8.0D) {
                     mob.getLookControl().setLookAt(nearestPlayer, 30.0F, 30.0F);
                 }

@@ -11,8 +11,8 @@ import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * A Java client to connect a Minecraft Forge Mod (1.20.x / Java 17) 
- * to the OpenNPC python server.
+ * HTTP client connecting Minecraft Forge mod to the OpenNPC Python server.
+ * Supports decision requests, event reporting, and villain bark retrieval.
  */
 public class OpenNPCClient {
     private final HttpClient httpClient;
@@ -31,17 +31,23 @@ public class OpenNPCClient {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
     }
 
+    /**
+     * Full decision response including optional villain bark.
+     */
     public static class DecisionResponse {
         public String agent_id;
         public String action;
         public float confidence;
         public String reason;
         public String memory_update;
+        // Villain-specific fields
+        public String bark;
+        public String strategy;
+        public boolean llm_enhanced;
     }
 
     /**
-     * Sends a decision request asynchronously.
-     * Use this so you do not block the Minecraft main server/client thread!
+     * Send a decision request asynchronously. Never blocks the server thread.
      */
     public CompletableFuture<DecisionResponse> decide(String configJson, String stateJson) {
         JsonObject payload = new JsonObject();
@@ -51,6 +57,7 @@ public class OpenNPCClient {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/decide"))
                 .header("Content-Type", "application/json")
+                .timeout(Duration.ofSeconds(3))
                 .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(payload)))
                 .build();
 
@@ -62,5 +69,25 @@ public class OpenNPCClient {
                         throw new RuntimeException("OpenNPC API error: " + response.statusCode() + " " + response.body());
                     }
                 });
+    }
+
+    /**
+     * Report a player action event for pattern tracking (fire-and-forget).
+     */
+    public void reportEvent(String agentId, String eventText) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("agent_id", agentId);
+        payload.addProperty("event", eventText);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/event"))
+                .header("Content-Type", "application/json")
+                .timeout(Duration.ofSeconds(2))
+                .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(payload)))
+                .build();
+
+        // Fire and forget — don't block on result
+        httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                .exceptionally(ex -> null);
     }
 }

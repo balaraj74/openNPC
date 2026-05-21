@@ -27,7 +27,7 @@ from opennpc.coordination import MultiAgentCoordinator
 from opennpc.decision import DecisionEngine
 from opennpc.experience import RuntimeExperienceLogger
 from opennpc.security import RuntimeSettings, token_matches
-from opennpc.types import AgentConfig, GameState
+from opennpc.types import AgentConfig, AgentType, GameState
 
 
 def require_api_deps() -> None:
@@ -145,8 +145,14 @@ def decide(request: DecisionRequest) -> dict[str, Any]:
     config = AgentConfig.from_dict(request.config)
     state = GameState.from_dict(request.state)
     
+    # Report player action to pattern tracker if present in state extras
+    player_action = state.value("player_action")
+    if player_action and player_action != "idle":
+        pattern_tracker.record(str(player_action))
+    
     # Beautiful incoming AI request log
-    print(f"🤖 [OpenNPC Request] Mob UUID: {config.agent_id[:8]}... | Health: {state.health:.1f} | Threat Level: {state.threat_level:.2f}")
+    agent_label = "VILLAIN" if config.agent_type == AgentType.VILLAIN else "MOB"
+    print(f"🤖 [{agent_label}] {config.agent_id[:8]}... | HP: {state.health:.0f} | Threat: {state.threat_level:.2f} | Player: {player_action or 'unknown'}")
     
     decision = engine.decide(
         config,
@@ -156,10 +162,53 @@ def decide(request: DecisionRequest) -> dict[str, Any]:
         event=request.event,
     )
     
-    # Beautiful outgoing AI decision log
-    print(f"🧠 [OpenNPC Decision] Mob UUID: {config.agent_id[:8]}... -> Action: {decision.action.upper()} (Conf: {decision.confidence:.2f}) | Reason: {decision.reason}")
+    result = decision.to_dict()
     
-    return decision.to_dict()
+    # Enrich VILLAIN responses with bark + strategic plan
+    if config.agent_type == AgentType.VILLAIN:
+        # Combat bark — cached, fast (~50ms after warmup)
+        try:
+            # Pick bark category based on action
+            bark_category = "combat_taunt"
+            if decision.action in ("retreat", "flee", "hide"):
+                bark_category = "combat_wounded"
+            elif decision.action in ("patrol", "idle"):
+                bark_category = "spot_player" if state.threat_level > 0.3 else "combat_taunt"
+            
+            bark_line = npc_dialogue.bark(config, category=bark_category)
+            result["bark"] = bark_line.text
+        except Exception:
+            result["bark"] = ""
+        
+        # Villain strategic plan — enriched with LLM reasoning
+        try:
+            plan = villain_planner.plan(config, state)
+            result["strategy"] = plan.long_term_strategy
+            result["llm_enhanced"] = plan.llm_enhanced
+        except Exception:
+            result["strategy"] = ""
+            result["llm_enhanced"] = False
+        
+        print(f"🧠 [VILLAIN] {config.agent_id[:8]}... → {decision.action.upper()} | Strategy: {result.get('strategy', 'N/A')} | Bark: \"{result.get('bark', '')[:40]}\"")
+    else:
+        print(f"🧠 [MOB] {config.agent_id[:8]}... → {decision.action.upper()} (Conf: {decision.confidence:.2f}) | {decision.reason}")
+    
+    return result
+
+
+class EventReport(BaseModel):
+    agent_id: str
+    event: str
+
+@app.post("/event", dependencies=[Depends(require_api_key)])
+def report_event(request: EventReport) -> dict[str, str]:
+    """Fire-and-forget event reporting for player pattern tracking."""
+    if "player_" in request.event:
+        # Extract action from event like "player_attack_at_distance_3"
+        parts = request.event.replace("player_", "").split("_at_distance")
+        action = parts[0] if parts else request.event
+        pattern_tracker.record(action)
+    return {"status": "ok"}
 
 
 @app.post("/batch/decide", dependencies=[Depends(require_api_key)])
