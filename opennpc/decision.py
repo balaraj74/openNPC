@@ -28,6 +28,12 @@ def _load_dqn_policy(path: str) -> Policy:
     return DQNPolicy.from_file(path)
 
 
+def _load_onnx_policy(path: str) -> Policy:
+    from opennpc.training.onnx_policy import ONNXPolicy
+
+    return ONNXPolicy.from_file(path)
+
+
 class DecisionEngine:
     """Combines state, memory, goals, personality, policy, and validation."""
 
@@ -61,6 +67,7 @@ class DecisionEngine:
         self.policy_loaders: dict[str, PolicyLoader] = {
             "ppo": _load_ppo_policy,
             "dqn": _load_dqn_policy,
+            "onnx": _load_onnx_policy,
         }
         if policy_loaders:
             self.policy_loaders.update(policy_loaders)

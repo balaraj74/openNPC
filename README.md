@@ -241,6 +241,44 @@ async_engine = AsyncDecisionEngine(max_workers=4)
 decision = await async_engine.decide(config, state)
 ```
 
+### OpenNPCSDK
+
+Recommended facade for engine integrations that need a compact sync/async API,
+decision caching, and policy registration from one object.
+
+```python
+from opennpc import AgentConfig, GameState, Goal, OpenNPCSDK
+
+with OpenNPCSDK() as npc:
+    config = AgentConfig(
+        agent_id="guard_01",
+        goals=[Goal("survive", 1.0)],
+        allowed_actions=["idle", "defend", "flee"],
+    )
+    state = GameState(agent_id="guard_01", health=42, threat_level=0.7)
+
+    decision = npc.decide(config, state)
+    print(decision.action)
+```
+
+### Production API Settings
+
+The REST service is local-development friendly by default. For production,
+set these environment variables before running `uvicorn`:
+
+```bash
+export OPENNPC_ENV=production
+export OPENNPC_API_KEY="replace-with-a-long-random-token"
+export OPENNPC_DEBUG=false
+uvicorn opennpc.api.service:app --host 127.0.0.1 --port 8787
+```
+
+Clients can authenticate with `Authorization: Bearer <token>` or
+`X-OpenNPC-Key: <token>`. Batch size, agent id length, event length, and debug
+memory limits can be tuned with `OPENNPC_MAX_BATCH_SIZE`,
+`OPENNPC_MAX_AGENT_ID_LENGTH`, `OPENNPC_MAX_EVENT_LENGTH`, and
+`OPENNPC_MAX_MEMORY_LIMIT`.
+
 ### Memory
 
 ```python

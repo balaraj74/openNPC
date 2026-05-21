@@ -10,9 +10,15 @@ from opennpc.types import ActionDecision, AgentConfig, DecisionTrace, GameState
 
 
 class RestDecisionClient:
-    def __init__(self, base_url: str = "http://127.0.0.1:8787", timeout: float = 5.0) -> None:
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8787",
+        timeout: float = 5.0,
+        api_key: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.api_key = api_key
 
     def decide(
         self,
@@ -79,17 +85,23 @@ class RestDecisionClient:
         return self._get(f"/debug/experience/{agent_id}?limit={limit}")
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         req = request.Request(
             f"{self.base_url}{path}",
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         with request.urlopen(req, timeout=self.timeout) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _get(self, path: str) -> dict[str, Any]:
-        with request.urlopen(f"{self.base_url}{path}", timeout=self.timeout) as response:
+        req = request.Request(f"{self.base_url}{path}", method="GET")
+        if self.api_key:
+            req.add_header("Authorization", f"Bearer {self.api_key}")
+        with request.urlopen(req, timeout=self.timeout) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _decision_from_dict(self, data: Mapping[str, Any]) -> ActionDecision:

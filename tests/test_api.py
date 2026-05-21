@@ -1,6 +1,8 @@
 from fastapi.testclient import TestClient
 
+from opennpc.api import service
 from opennpc.api.service import app, experience_logger
+from opennpc.security import RuntimeSettings
 
 
 def test_api_decide_endpoint() -> None:
@@ -104,3 +106,51 @@ def test_api_debug_dashboard_endpoint() -> None:
 
     assert response.status_code == 200
     assert "OpenNPC Debug Dashboard" in response.text
+    assert "function esc(" in response.text or "escapeHTML" in response.text
+
+
+def test_api_key_protects_runtime_endpoints(monkeypatch) -> None:
+    monkeypatch.setattr(service, "settings", RuntimeSettings(api_key="secret"))
+    client = TestClient(app)
+    payload = {
+        "config": {
+            "agent_id": "enemy_auth",
+            "agent_type": "enemy",
+            "goals": [{"name": "survive", "priority": 1.0}],
+            "allowed_actions": ["idle", "defend"],
+        },
+        "state": {"agent_id": "enemy_auth", "health": 90},
+    }
+
+    assert client.post("/decide", json=payload).status_code == 401
+    response = client.post("/decide", json=payload, headers={"Authorization": "Bearer secret"})
+
+    assert response.status_code == 200
+    assert response.json()["agent_id"] == "enemy_auth"
+
+
+def test_debug_endpoints_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(service, "settings", RuntimeSettings(debug_enabled=False))
+    client = TestClient(app)
+
+    response = client.get("/debug/decisions")
+
+    assert response.status_code == 404
+
+
+def test_batch_limit_is_enforced(monkeypatch) -> None:
+    monkeypatch.setattr(service, "settings", RuntimeSettings(max_batch_size=1))
+    client = TestClient(app)
+    item = {
+        "config": {
+            "agent_id": "enemy_batch",
+            "agent_type": "enemy",
+            "goals": [{"name": "survive", "priority": 1.0}],
+            "allowed_actions": ["idle", "defend"],
+        },
+        "state": {"agent_id": "enemy_batch", "health": 90},
+    }
+
+    response = client.post("/batch/decide", json={"requests": [item, item]})
+
+    assert response.status_code == 413

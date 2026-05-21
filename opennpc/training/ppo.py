@@ -197,6 +197,82 @@ class PPOPytorchPolicy:
         model.load_state_dict(checkpoint["state_dict"])
         return cls(model, actions)
 
+    def export_onnx(self, path: str | Path) -> Path:
+        """Export this PPO policy to ONNX format for dependency-free inference.
+
+        Produces two files:
+        - ``<path>``: the ONNX model (actor head only; outputs action logits).
+        - ``<path>.meta.json``: ``action_space`` and ``state_size`` metadata
+          consumed by :class:`~opennpc.training.onnx_policy.ONNXPolicy`.
+
+        Parameters
+        ----------
+        path:
+            Destination ``.onnx`` file path.
+
+        Returns
+        -------
+        Path
+            The resolved path to the written ONNX file.
+
+        Example
+        -------
+        ::
+
+            policy = PPOPytorchPolicy.from_file("enemy.pt")
+            policy.export_onnx("enemy.onnx")
+
+            # Load at runtime (no PyTorch needed):
+            from opennpc.training.onnx_policy import ONNXPolicy
+            onnx_policy = ONNXPolicy.from_file("enemy.onnx")
+        """
+        require_training_deps()
+        try:
+            import json as _json
+            import torch.onnx as _onnx  # noqa: F401 — verify torch.onnx is present
+        except ImportError as exc:
+            raise ImportError("torch is required to export ONNX models.") from exc
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Wrap to export only the actor head (logits only, no value head).
+        class _ActorOnly(torch.nn.Module):
+            def __init__(self, actor_critic: ActorCritic) -> None:
+                super().__init__()
+                self._m = actor_critic
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                logits, _ = self._m(x)
+                return logits
+
+        actor_only = _ActorOnly(self.model)
+        actor_only.eval()
+        dummy_input = torch.zeros(1, STATE_SIZE, dtype=torch.float32)
+
+        torch.onnx.export(
+            actor_only,
+            dummy_input,
+            str(path),
+            export_params=True,
+            opset_version=17,
+            do_constant_folding=True,
+            input_names=["state"],
+            output_names=["logits"],
+            dynamic_axes={"state": {0: "batch"}, "logits": {0: "batch"}},
+        )
+
+        # Write companion metadata file.
+        meta_path = path.with_suffix(".onnx.meta.json")
+        meta_path.write_text(_json.dumps({
+            "action_space": self.actions,
+            "state_size": STATE_SIZE,
+            "model_type": "ppo",
+            "sdk_version": "0.1.0",
+        }, indent=2))
+
+        return path
+
     def select_action(
         self,
         config: AgentConfig,

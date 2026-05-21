@@ -1,0 +1,89 @@
+// OpenNPC gRPC service definition.
+//
+// This proto defines the engine-agnostic inference interface that mirrors
+// the REST API at /decide, /batch/decide, and /health.
+//
+// Generate stubs:
+//   python -m grpc_tools.protoc \
+//     -I opennpc/proto \
+//     --python_out=opennpc/proto \
+//     --grpc_python_out=opennpc/proto \
+//     opennpc/proto/opennpc.proto
+
+syntax = "proto3";
+
+package opennpc;
+
+option java_multiple_files = true;
+option java_package = "io.opennpc.grpc";
+
+// ------------------------------------------------------------
+// Service
+// ------------------------------------------------------------
+
+service NPCService {
+  // Request a single action decision for one agent.
+  rpc Decide (DecideRequest) returns (DecideResponse);
+
+  // Batch version — decisions for multiple agents in one round-trip.
+  rpc BatchDecide (BatchDecideRequest) returns (BatchDecideResponse);
+
+  // Health check — returns "ok" when the server is ready.
+  rpc Health (HealthRequest) returns (HealthResponse);
+}
+
+// ------------------------------------------------------------
+// Decide
+// ------------------------------------------------------------
+
+message DecideRequest {
+  // JSON-encoded AgentConfig dict.
+  string agent_config_json = 1;
+
+  // JSON-encoded GameState dict.
+  string game_state_json   = 2;
+
+  // Subset of actions to consider (empty = use config.allowed_actions).
+  repeated string available_actions = 3;
+
+  // Optional reward feedback from the last step.
+  float  reward       = 4;
+  bool   has_reward   = 5;   // set to true when reward is meaningful
+
+  // Optional free-text event to store in agent memory.
+  string event        = 6;
+}
+
+message DecideResponse {
+  string agent_id      = 1;
+  string action        = 2;
+  float  confidence    = 3;
+  string reason        = 4;
+  string memory_update = 5;
+
+  // JSON-encoded DecisionTrace for debugging.
+  string trace_json    = 6;
+}
+
+// ------------------------------------------------------------
+// Batch Decide
+// ------------------------------------------------------------
+
+message BatchDecideRequest {
+  repeated DecideRequest requests = 1;
+}
+
+message BatchDecideResponse {
+  repeated DecideResponse decisions = 1;
+}
+
+// ------------------------------------------------------------
+// Health
+// ------------------------------------------------------------
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status  = 1;   // "ok"
+  string service = 2;   // "opennpc"
+}

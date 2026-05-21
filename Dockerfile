@@ -1,6 +1,6 @@
 # --- OpenNPC Inference Server ---
 # Build:  docker build -t opennpc-api .
-# Run:    docker run -p 8787:8787 opennpc-api
+# Run:    docker run -p 8787:8787 -e OPENNPC_API_KEY=change-me opennpc-api
 
 FROM python:3.12-slim AS base
 
@@ -24,6 +24,9 @@ RUN useradd --create-home appuser
 USER appuser
 
 EXPOSE 8787
+
+ENV OPENNPC_ENV=production
+ENV OPENNPC_DEBUG=false
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8787/health')" || exit 1

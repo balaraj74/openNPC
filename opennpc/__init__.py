@@ -16,6 +16,8 @@ from opennpc.rewards import (
     RewardStrategy,
     VillainRewardStrategy,
 )
+from opennpc.sdk import OpenNPCSDK
+from opennpc.security import RuntimeSettings
 from opennpc.strategy import PlayerPatternTracker
 from opennpc.types import (
     ActionDecision,
@@ -51,11 +53,13 @@ __all__ = [
     "LODTier",
     "MemoryEvent",
     "MultiAgentCoordinator",
+    "OpenNPCSDK",
     "Personality",
     "PlayerPatternTracker",
     "RandomPolicy",
     "RewardBreakdown",
     "RewardStrategy",
+    "RuntimeSettings",
     "RuntimeExperienceLogger",
     "SQLiteMemoryStore",
     "ScriptedCombatPolicy",

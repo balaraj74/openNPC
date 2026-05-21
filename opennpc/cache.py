@@ -61,7 +61,7 @@ def _state_fingerprint(state: GameState, tolerance: float) -> str:
         "nearby": sorted(state.nearby_entities),
     }
     raw = json.dumps(key_parts, sort_keys=True)
-    return hashlib.md5(raw.encode()).hexdigest()
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 class CacheEntry:
